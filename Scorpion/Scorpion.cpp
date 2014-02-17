@@ -1,5 +1,40 @@
 #include "Scorpion.h"
 
+// We are doing naughty things now
+#pragma unmanaged
+
+__declspec(naked) void stub(void)
+{
+	__asm
+	{
+		// Our return EIP gets placed here
+		push 0x13371337
+			// Push EIP register to stack.
+			pushfd
+			// Push EXX registers to stack.
+			pushad
+
+			// Push the DLL path string to stack.
+			push 0x13371337
+			// Copy LoadLibraryA to EAX
+			mov eax, 0x13371337
+
+			// Call the function
+			call eax
+
+			// Restore registers
+			popad
+			popfd
+
+			// Give control to process
+			ret
+	}
+}
+
+__declspec(naked) void stub_end(void) { /* The offset in between stub and stub_end is sizeof(stub) */ }
+
+#pragma managed(push, on)
+
 namespace Scorpion
 {
 	bool EnableDebugPrivilege(bool bEnable)
@@ -21,6 +56,77 @@ namespace Scorpion
 		if (!AdjustTokenPrivileges(hToken, false, &tP, sizeof(TOKEN_PRIVILEGES), NULL, NULL)) return false;
 
 		return true; 
+	}
+
+	bool injASM(DWORD PID, System::String^ dllPath, bool PAA)
+	{
+		void* dll;
+		char* dllName = (char*)Runtime::InteropServices::Marshal::StringToHGlobalAnsi(dllPath).ToPointer();
+		void* stubby;
+
+		unsigned long LLA = (unsigned long) GetProcAddress(GetModuleHandle("kernel32.dll"), "LoadLibraryA");
+
+		// Remember, the stack is FILO, so stub went in first upon initialization, and then stub_end immediately after (or so we assume, but this assumption should be pretty safe).
+		unsigned long stubSize = (unsigned long)stub_end - (unsigned long)stub;
+
+		// As we do with CreateRemoteThread, we have to open a HANDLE to the process
+		HANDLE pHandle;
+		(PAA) ? pHandle = OpenProcess(PROCESS_ALL_ACCESS | PROCESS_CREATE_THREAD, FALSE, PID) : pHandle = OpenProcess(PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION | PROCESS_CREATE_THREAD, FALSE, PID);
+		if (pHandle == INVALID_HANDLE_VALUE) return false;
+
+		// We allocate memory for the DLL name + 1 for NULL terminator, MEM_COMMIT allocates memory (physically paged only on access), and we make sure the memory is executable and writable. 
+		dll = VirtualAllocEx(pHandle, NULL, strlen(dllName) + 1, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+		stubby = VirtualAllocEx(pHandle, NULL, 512, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+
+		// We write our stub in
+		WriteProcessMemory(pHandle, dll, dllName, strlen(dllName), NULL);
+
+		// Open a HANDLE to Snapshot, 
+		HANDLE threadShot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, PID);
+		DWORD TID;
+
+		// This shouldn't happen, but it can, so we must. 
+		if (threadShot == INVALID_HANDLE_VALUE) return false;
+		else
+		{
+			// Instead of walking processes, we're gonna walk some threads until we find one which is a child of PID
+			THREADENTRY32 te32;
+			te32.dwSize = sizeof(te32);
+			if (Thread32First(threadShot, &te32))
+			while (Thread32Next(threadShot, &te32))
+			{
+				if (te32.th32OwnerProcessID == PID) TID = te32.th32ThreadID;
+				break;
+			}
+		}
+
+		// Time to open a HANDLE to our thread.
+		HANDLE tHandle;
+
+		// The thread accessors are similar to the process accessors, I'm going to use the same bool to reduce overhead. 
+		(PAA) ? tHandle = OpenProcess(THREAD_ALL_ACCESS, false, TID) : OpenProcess(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT | THREAD_TERMINATE | THREAD_SUSPEND_RESUME, false, TID);
+		if (tHandle == INVALID_HANDLE_VALUE) return false;
+
+		// We suspend our thread
+		SuspendThread(tHandle);
+
+		// CONTEXT is a Win32 struct that has internal processor data. MSDN is your friend. I'm still flaky with this. 
+		CONTEXT ctx;
+		ctx.ContextFlags = CONTEXT_CONTROL;
+
+		// Save our old EIP, we need to RET to this
+		DWORD oldEIP = ctx.Eip;
+
+		// We write in the proper addresses at runtime. 
+		VirtualProtect(stub, stubSize, PAGE_EXECUTE_READWRITE, NULL);
+		memcpy((void *)((unsigned long)stub + 1),  &oldEIP, 4);
+		memcpy((void *)((unsigned long)stub + 8),  &dllName, 4);
+		memcpy((void *)((unsigned long)stub + 13), &LLA, 4);
+
+		// Write our stub to the process
+		WriteProcessMemory(pHandle, )
+
+
 	}
 
 	bool InjCRT(DWORD PID, String^ dllPath, bool PAA)
@@ -92,85 +198,7 @@ namespace Scorpion
 		CloseHandle(ret);
 		return true;
 	}
-	
-#pragma unmanaged
-	__declspec(naked) bool injASM(DWORD PID, System::String^ dllPath, bool PAA)
-	{
-		void* dll;
-		char* dllName = (char*)Runtime::InteropServices::Marshal::StringToHGlobalAnsi(dllPath).ToPointer();
-		void* stubby;
-
-		// As we do with CreateRemoteThread, we have to open a HANDLE to the process
-		HANDLE pHandle;
-		(PAA) ? pHandle = OpenProcess(PROCESS_ALL_ACCESS | PROCESS_CREATE_THREAD, FALSE, PID) : pHandle = OpenProcess(PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION | PROCESS_CREATE_THREAD, FALSE, PID);
-		if (pHandle == INVALID_HANDLE_VALUE) return false;
-
-		// We allocate memory for the DLL name + 1 for NULL terminator, MEM_COMMIT allocates memory (physically paged only on access), and we make sure the memory is executable and writable. 
-		dll = VirtualAllocEx(pHandle, NULL, strlen(dllName) + 1, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
-		stubby = VirtualAllocEx(pHandle, NULL, 512, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
-
-		// We write our stub in
-		WriteProcessMemory(pHandle, dll, dllName, strlen(dllName), NULL);
-
-		// Open a HANDLE to Snapshot, 
-		HANDLE threadShot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, PID); 
-		DWORD TID;
-
-		// This shouldn't happen, but it can, so we must. 
-		if (threadShot == INVALID_HANDLE_VALUE) return false;
-		else
-		{
-			// Instead of walking processes, we're gonna walk some threads until we find one which is a child of PID
-			THREADENTRY32 te32;
-			te32.dwSize = sizeof(te32);
-			if (Thread32First(threadShot, &te32))
-				while (Thread32Next(threadShot, &te32))
-				{
-					if (te32.th32OwnerProcessID == PID) TID = te32.th32ThreadID;
-					break;
-				}
-		}
-
-		// Time to open a HANDLE to our thread.
-		HANDLE tHandle;
-
-		// The thread accessors are similar to the process accessors, I'm going to use the same bool to reduce overhead. 
-		(PAA) ? tHandle = OpenProcess(THREAD_ALL_ACCESS, false, TID) : OpenProcess(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT | THREAD_TERMINATE | THREAD_SUSPEND_RESUME, false, TID);
-		if (tHandle == INVALID_HANDLE_VALUE) return false;
-
-		// We suspend our thread
-		SuspendThread(tHandle);
-
-		// CONTEXT is a Win32 struct that has internal processor data. MSDN is your friend. I'm still flaky with this. 
-		CONTEXT ctx;
-		ctx.ContextFlags = CONTEXT_CONTROL;
-
-		// Save our old EIP, we need to RET to this
-		DWORD oldEIP = ctx.Eip;
-
-		__asm
-		{
-			push oldEIP // Our old EIP
-				// PUSH EFLAGS register to stack
-				pushfd
-				// PUSH EXX registers to stack (EAX, EBX, etc.)
-				pushad
-
-				push dllStr
-				mov eax, loadlib
-				call eax
-
-				// Restore registers
-				popad
-				popfd
-				// Return control to thread
-				ret
-		}
-
-	}
-
 }
-#pragma managed(push, on)
 
 [System::STAThread]
 int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR lpCmdLine, INT nCmdShow)
