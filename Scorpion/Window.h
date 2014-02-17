@@ -68,6 +68,7 @@ namespace Scorpion {
 
 
 
+
 	private: System::ComponentModel::IContainer^  components;
 
 
@@ -308,7 +309,6 @@ namespace Scorpion {
 			this->hpCbx->Location = System::Drawing::Point(123, 93);
 			this->hpCbx->Name = L"hpCbx";
 			this->hpCbx->Size = System::Drawing::Size(224, 21);
-			this->hpCbx->SelectedIndex = 0;
 			this->hpCbx->TabIndex = 13;
 			this->hpCbx->Visible = false;
 			// 
@@ -351,7 +351,6 @@ namespace Scorpion {
 			this->injMethCb->Location = System::Drawing::Point(123, 66);
 			this->injMethCb->Name = L"injMethCb";
 			this->injMethCb->Size = System::Drawing::Size(224, 21);
-			this->injMethCb->SelectedIndex = 0;
 			this->injMethCb->TabIndex = 10;
 			this->injMethCb->Visible = false;
 			this->injMethCb->SelectedIndexChanged += gcnew System::EventHandler(this, &Window::injMethCb_SelectedIndexChanged);
@@ -377,9 +376,8 @@ namespace Scorpion {
 			this->credLbl->ForeColor = System::Drawing::Color::MistyRose;
 			this->credLbl->Location = System::Drawing::Point(3, 59);
 			this->credLbl->Name = L"credLbl";
-			this->credLbl->Size = System::Drawing::Size(126, 13);
+			this->credLbl->Size = System::Drawing::Size(0, 13);
 			this->credLbl->TabIndex = 8;
-			this->credLbl->Text = L"(c) David Stancu (@mach_kernel) " + DateTime::Now.Year;
 			// 
 			// advsetBt
 			// 
